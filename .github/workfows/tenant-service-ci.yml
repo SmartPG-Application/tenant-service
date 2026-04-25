@@ -1,19 +1,24 @@
-
 name: "SmartPG — Tenant Service CI/CD"
 
 on:
   push:
-    branches: [main, develop]
+    branches:
+      - develop
+      - main
   pull_request:
-    branches: [main]
+    branches:
+      - main
+
+permissions:
+  contents: write
 
 jobs:
   sonarqube:
     uses: SmartPG-Application/.github/.github/workflows/template-sonarqube.yml@main
     with:
-      service_name: "smartpg-tenant-service"
+      service_name: "smartpg-tenant"
       service_path: "."
-      sonar_project_key: "smartpg-tenant-service"
+      sonar_project_key: "smartpg-tenant"
     secrets:
       SONARQUBE_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
       SONARQUBE_URL: ${{ secrets.SONARQUBE_URL }}
@@ -21,11 +26,11 @@ jobs:
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
 
-  build-and-snyk:
+  build-snyk:
     needs: sonarqube
     uses: SmartPG-Application/.github/.github/workflows/template-build-snyk.yml@main
     with:
-      service_name: "smartpg-tenant-service"
+      service_name: "smartpg-tenant"
       service_path: "."
       node_version: "20"
     secrets:
@@ -35,12 +40,14 @@ jobs:
       ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
 
   docker:
-    needs: build-and-snyk
+    needs: build-snyk
+    if: github.event_name == 'push'
     uses: SmartPG-Application/.github/.github/workflows/template-docker.yml@main
     with:
-      service_name: "smartpg-tenant-service"
+      service_name: "smartpg-tenant"
       service_path: "."
       docker_image_name: "smartpg-tenant-service"
+      environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -50,25 +57,31 @@ jobs:
 
   approval:
     needs: docker
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref_name == 'main' && github.event_name == 'push'
     uses: SmartPG-Application/.github/.github/workflows/template-approval-gate.yml@main
     with:
-      service_name: "smartpg-tenant-service"
-      image_tag: ${{ needs.docker.outputs.version }}
-      values_key: "tenant-service"
+      service_name: "smartpg-tenant"
+      image_tag: ${{ needs.docker.outputs.image_tag }}
     secrets:
       SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
 
-  deploy:
+  cd:
     needs: [docker, approval]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: |
+      always() &&
+      needs.docker.result == 'success' &&
+      (
+        github.ref_name == 'develop' ||
+        (github.ref_name == 'main' && needs.approval.result == 'success')
+      )
     uses: SmartPG-Application/.github/.github/workflows/template-cd.yml@main
     with:
-      service_name: "smartpg-tenant-service"
-      values_key: "tenant-service"
-      image_tag: ${{ needs.docker.outputs.version }}
+      service_name: "smartpg-tenant"
+      values_key: "tenant"
+      image_tag: ${{ needs.docker.outputs.image_tag }}
+      environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
     secrets:
       MANIFEST_REPO_PAT: ${{ secrets.MANIFEST_REPO_PAT }}
       SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
